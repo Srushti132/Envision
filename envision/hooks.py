@@ -213,3 +213,13 @@ app_license = "MIT"
 # auth_hooks = [
 # 	"envision.auth.validate"
 # ]
+
+fixtures=[
+    {"dt":"Report","filters":[
+        [
+            "module","in",[
+               "Envision"
+            ]
+        ]
+    ]},
+]
