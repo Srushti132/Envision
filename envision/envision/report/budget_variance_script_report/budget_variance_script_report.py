@@ -35,97 +35,90 @@ def execute(filters=None):
 
 
 def get_final_data(dimension, dimension_items, filters, period_month_ranges, data, DCC_allocation):
-	if filters.get("period") == "Yearly" and filters.get("budget_against") == "Project":
-		# Track the number of original rows processed
-		original_row_count = 0
-		
-		for account, monthwise_data in dimension_items.items():
-			row = [dimension, account]
-			totals = [0, 0, 0]
-			
-			for year in get_fiscal_years(filters):
-				last_total = 0
-				
-				for relevant_months in period_month_ranges:
-					period_data = [0, 0, 0]
-					
-					for month in relevant_months:
-						if monthwise_data.get(year[0]):
-							month_data = monthwise_data.get(year[0]).get(month, {})
-							
-							for i, fieldname in enumerate(["target", "actual", "variance"]):
-								value = flt(month_data.get(fieldname))
-								period_data[i] += value
-								totals[i] += value
+    revenue_budget_total = 0  # Total revenue budget
+    revenue_actual_total = 0
+    expense_budget_total = 0  # Total expense budget
+    expense_actual_total = 0
+    revenue_rows = []  # Rows with "Revenue" in the Revenue/Expense column
+    expense_rows = []  # Rows with "Expense" in the Revenue/Expense column
 
-					period_data[0] += last_total
+    for account, monthwise_data in dimension_items.items():
+        row = [dimension, account]
+        totals = [0, 0, 0]
 
-					if DCC_allocation:
-						period_data[0] = period_data[0] * (DCC_allocation / 100)
-						period_data[1] = period_data[1] * (DCC_allocation / 100)
+        for year in get_fiscal_years(filters):
+            last_total = 0
+            for relevant_months in period_month_ranges:
+                period_data = [0, 0, 0]
+                for month in relevant_months:
+                    if monthwise_data.get(year[0]):
+                        month_data = monthwise_data.get(year[0]).get(month, {})
+                        for i, fieldname in enumerate(["target", "actual", "variance"]):
+                            value = flt(month_data.get(fieldname))
+                            period_data[i] += value
+                            totals[i] += value
 
-					if filters.get("show_cumulative"):
-						last_total = period_data[0] - period_data[1]
+                        # Fetching Revenue/Expense data based on project and account
+                        revenue_expense = get_revenue_expense(row, account)
+                        period_data.append(revenue_expense)
 
-					period_data[2] = period_data[0] - period_data[1]
-					row += period_data
+                period_data[0] += last_total
 
-				totals[2] = totals[0] - totals[1]
-				
-				if filters["period"] != "Yearly":
-					row += totals
-					
-				data.append(row)
-				original_row_count += 1
+                if DCC_allocation:
+                    period_data[0] = period_data[0] * (DCC_allocation / 100)
+                    period_data[1] = period_data[1] * (DCC_allocation / 100)
 
-				# Check if we need to add an additional row after every two original rows
-				if original_row_count % 2 == 0:
-					# Calculate differences between budget and actual columns of previous two rows
-					prev_row = data[-2]
-					current_row = data[-1]
-					budget_difference = prev_row[2] - current_row[2]
-					actual_difference = prev_row[3] - current_row[3]
+                if filters.get("show_cumulative"):
+                    last_total = period_data[0] - period_data[1]
 
-					# Set account column label to "Margin"
-					margin_row = ["", "Margin", budget_difference, actual_difference," "]
-					data.append(margin_row)
+                period_data[2] = period_data[0] - period_data[1]
+                row += period_data
 
-		return data
+        if row[-1] == "Revenue":
+            revenue_budget_total += row[2]
+            revenue_actual_total += row[3]
+            revenue_rows.append(row)
+        elif row[-1] == "Expense":
+            expense_budget_total += row[2]
+            expense_actual_total += row[3]
+            expense_rows.append(row)
 
+        totals[2] = totals[0] - totals[1]
+        if filters["period"] != "Yearly":
+            row += totals
 
-	else:
-		for account, monthwise_data in dimension_items.items():
-			row = [dimension, account]
-			totals = [0, 0, 0]
-			for year in get_fiscal_years(filters):
-				last_total = 0
-				for relevant_months in period_month_ranges:
-					period_data = [0, 0, 0]
-					for month in relevant_months:
-						if monthwise_data.get(year[0]):
-							month_data = monthwise_data.get(year[0]).get(month, {})
-							for i, fieldname in enumerate(["target", "actual", "variance"]):
-								value = flt(month_data.get(fieldname))
-								period_data[i] += value
-								totals[i] += value
+    # Sort revenue and expense rows based on the Revenue/Expense column
+    revenue_rows.sort(key=lambda x: x[-1])
+    expense_rows.sort(key=lambda x: x[-1])
 
-					period_data[0] += last_total
+    # Append sorted rows to final data
+    data.extend(revenue_rows)
+    data.extend(expense_rows)
 
-					if DCC_allocation:
-						period_data[0] = period_data[0] * (DCC_allocation / 100)
-						period_data[1] = period_data[1] * (DCC_allocation / 100)
+    # Calculate the margin based on revenue and expense budgets
+    margin1 = revenue_budget_total - expense_budget_total
+    margin2 = revenue_actual_total - expense_actual_total
 
-					if filters.get("show_cumulative"):
-						last_total = period_data[0] - period_data[1]
+    # Add margin row
+    margin_row = ["", "Margin", margin1, margin2, 0, ""]
+    data.append(margin_row)
 
-					period_data[2] = period_data[0] - period_data[1]
-					row += period_data
-			totals[2] = totals[0] - totals[1]
-			if filters["period"] != "Yearly":
-				row += totals
-			data.append(row)
+    return data
 
-		return data
+def get_revenue_expense(row, account):
+    project = row[0]  # Assuming project is the first column in the row
+    # Find budget entry for the project
+    budget_entry = frappe.get_value("Budget", {"project": project}, "name")
+
+    if budget_entry:
+        # Fetch Revenue/Expense data from Budget Account based on budget entry and account
+        budget_account = frappe.get_value("Budget Account",
+                                          {"parent": budget_entry, "account": account},
+                                          "custom_revenueexpense")
+
+        return budget_account
+
+    return None
 
 
 def get_columns(filters):
@@ -162,6 +155,12 @@ def get_columns(filters):
 					columns.append(
 						{"label": label, "fieldtype": "Float", "fieldname": frappe.scrub(label), "width": 150}
 					)
+				columns.append(	{
+			"label": _("Revenue/Expense"),
+			"fieldname": "Revenue_Expense",
+			"fieldtype": "Data",  # Adjust field type as per your requirement
+			"width": 150,
+		})
 			else:
 				for label in [
 					_("Budget") + " (%s)" + " " + str(year[0]),
